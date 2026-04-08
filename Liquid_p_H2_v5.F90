@@ -8,6 +8,7 @@ program Liquid_p_H2_v5
    real(dp), parameter :: pi    = 3.14159265358979323846264338327950288419_dp
    
    real(dp), parameter :: kB_SI = 1.380649e-23_dp
+   real(dp), parameter :: hartree_to_K = 315775.02480407_dp
    real(dp), parameter :: amu_to_kg = 1.66054e-27_dp 
    real(dp), parameter :: mass_H2_amu = 2.016_dp   
    real(dp), parameter :: mass_H2_kg = mass_H2_amu * amu_to_kg  
@@ -26,10 +27,10 @@ program Liquid_p_H2_v5
    real(dp), parameter :: temp  = 14.0_dp      
    real(dp), parameter :: tau   = 0.0025_dp        
    real(dp), parameter :: dt    = 0.0005_dp          ! Time step in ps (0.5 fs)
-   integer,  parameter :: equil_steps = 200000        ! Equilibration steps (10 ps)
-   integer,  parameter :: steps = 20000               ! Production steps (4 ps)
+   integer,  parameter :: equil_steps = 200000        ! Equilibration steps (100 ps)
+   integer,  parameter :: steps = 8000               ! Production steps (4 ps)
    integer,  parameter :: ntau  = steps/2            ! Max time lag for VACF
-   integer,  parameter :: ntraj = 1000  
+   integer,  parameter :: ntraj = 100  
    
    real(dp), parameter :: lattice_param = 5.54_dp
    real(dp), parameter :: box_length = 3.0_dp * lattice_param
@@ -43,6 +44,8 @@ program Liquid_p_H2_v5
    real(dp), parameter :: sg_C9     = 147037.3_dp   
    real(dp), parameter :: sg_C10    = 2617496.9_dp 
    real(dp), parameter :: cutoff    = 10.31_dp       ! Cutoff for intermolecular interaction
+   integer,  parameter :: n_potential_points = 2268
+   real(dp), parameter :: potential_cap_K = 40.0_dp
 
    real(dp)    :: r(3,n), v(3,n), f(3,n)
    real(dp)    :: vacf(ntau), vacf_sum(ntau), time_lag(ntau)
@@ -52,6 +55,7 @@ program Liquid_p_H2_v5
 
 
    call random_seed()
+   call write_sg_potential()
 
    vacf = 0.0_dp
    vacf_sum = 0.0_dp
@@ -108,6 +112,54 @@ program Liquid_p_H2_v5
 
 
 contains
+
+   subroutine write_sg_potential()
+      real(dp) :: dr, r_plot, v_plot
+      integer  :: k, u
+
+      dr = cutoff / real(n_potential_points, dp)
+
+      open(newunit=u, file='SG_classical_pot_v5.dat', status='replace', action='write')
+         write(u, '(A)') '# r(A)        V_over_kB(K)'
+         do k = 1, n_potential_points
+            r_plot = real(k, dp) * dr
+            v_plot = min(silvera_goldman_potential(r_plot), potential_cap_K)
+            write(u, '(2F15.6)') r_plot, v_plot
+         end do
+      close(u)
+
+      print *, 'saved to:  SG_classical_pot_v5.dat'
+   end subroutine write_sg_potential
+
+   pure function silvera_goldman_potential(r_mag) result(v_total)
+      real(dp), intent(in) :: r_mag
+      real(dp) :: v_total
+      real(dp) :: r2, r4, r6, r8, r9, r10
+      real(dp) :: fc, V_rep, V_att
+
+      if (r_mag <= 0.0_dp .or. r_mag >= cutoff) then
+         v_total = 0.0_dp
+         return
+      end if
+
+      if (r_mag <= sg_rc) then
+         fc = exp(-(sg_rc/r_mag - 1.0_dp)**2)
+      else
+         fc = 1.0_dp
+      end if
+
+      V_rep = hartree_to_K * exp(sg_alpha - sg_beta*r_mag - sg_gamma*r_mag**2)
+
+      r2 = r_mag**2
+      r4 = r2 * r2
+      r6 = r4 * r2
+      r8 = r6 * r2
+      r9 = r8 * r_mag
+      r10 = r8 * r2
+
+      V_att = sg_C6/r6 + sg_C8/r8 - sg_C9/r9 + sg_C10/r10
+      v_total = V_rep - fc * V_att
+   end function silvera_goldman_potential
 
    subroutine init_fcc(r, v, a, T)
       real(dp), intent(out) :: r(:,:), v(:,:)
@@ -189,7 +241,7 @@ contains
                   dfc = 0.0_dp
                end if
                
-               V_rep = exp(sg_alpha - sg_beta*rij_mag - sg_gamma*rij_mag2)
+               V_rep = hartree_to_K * exp(sg_alpha - sg_beta*rij_mag - sg_gamma*rij_mag2)
                dV_rep = -V_rep * (sg_beta + 2.0_dp*sg_gamma*rij_mag)
                
                r2 = rij_mag2
@@ -203,7 +255,7 @@ contains
                dV_att = -6.0_dp*sg_C6/r6 - 8.0_dp*sg_C8/r8 + 9.0_dp*sg_C9/r9 - 10.0_dp*sg_C10/r10
                dV_att = dV_att / rij_mag
 
-               fmag = -(dV_rep - dfc*V_att - fc*dV_att)
+               fmag = dV_rep - dfc*V_att - fc*dV_att
 
                fij = (fmag / rij_mag) * rij
                
@@ -319,6 +371,5 @@ contains
    end subroutine write_two_col
 
 end program Liquid_p_H2_v5
-
 
 
